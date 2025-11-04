@@ -58,9 +58,6 @@ def get_base_dir():
     os.makedirs(nanochat_dir, exist_ok=True)
     return nanochat_dir
 
-
-
-
 def print_banner():
     # Cool DOS Rebel font ASCII banner made with https://manytools.org/hacker-tools/ascii-banner/
     banner = """
@@ -75,4 +72,33 @@ def print_banner():
     print0(banner)
 
 
-print_banner()
+def is_ddp():
+    # TODO is there a proper way
+    return int(os.environ.get('RANK', -1)) != -1
+
+def get_dist_info():
+    if is_ddp():
+        assert all(var in os.environ for var in ['RANK', 'LOCAL_RANK', 'WORLD_SIZE'])
+        ddp_rank = int(os.environ['RANK'])
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])
+        ddp_world_size = int(os.environ['WORLD_SIZE'])
+        return True, ddp_rank, ddp_local_rank, ddp_world_size
+    else:
+        return False, 0, 0, 1
+
+#Deteching what we are on...
+def autodetect_device_type():
+    # prefer to use CUDA if available, otherwise use MPS, otherwise fallback on CPU
+    if torch.cuda.is_available():
+        device_type = "cuda"
+    elif torch.backends.mps.is_available():
+        device_type = "mps"
+    else:
+        device_type = "cpu"
+    print0(f"Autodetected device type: {device_type}")
+    return device_type
+
+def compute_cleanup():
+    """Companion function to compute_init, to clean things up before script exit"""
+    if is_ddp():
+        dist.destroy_process_group()
