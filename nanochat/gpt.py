@@ -72,3 +72,35 @@ class CasualSelfAttention(nn.module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin) # QK rotary embedding
         q, k = norm(q), norm(k) # QK norm
         q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2) # make head be batch dim, i.e. (B, T, H, D) -> (B, H, T, D)
+
+        #apply KV Cache: insert current k,v into chace, to get the full view
+        if kv_cache is not None:
+            k, v = kv_cache.insert_kv(self.layer_idx, k, v)
+
+        Tq = q.size()
+        Tk = k.size()
+
+        enable_gqa = self.n_head != self.n_kv_head #group query attention (GQA): duplicate key /value heads to match query heads if desired
+        if kv_cache is None or Tq == Tk:
+            #During training (no KV cache), attend as usual with casual attention
+            #And even if there is KV cache, we can still use the simple version
+            y = F.scaled_dot_product_attention(q, k , v, is_casual=False, enable_gqa=enable_gqa)
+           elif Tq == 1:
+            # During inference but with a single query in this forward pass:
+            # The query has to attend to all the keys/values in the cache
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=False, enable_gqa=enable_gqa)
+        else:
+            # During inference AND we have a chunk of queries in this forward pass:
+            # First, each query attends to all the cached keys/values (i.e. full prefix)
+            attn_mask = torch.zeros((Tq, Tk), dtype=torch.bool, device=q.device) # True = keep, False = mask
+            prefix_len = Tk - Tq
+            if prefix_len > 0: # can't be negative but could be zero
+                attn_mask[:, :prefix_len] = True
+            # Then, causal attention within this chunk
+            attn_mask[:, prefix_len:] = torch.tril(torch.ones((Tq, Tq), dtype=torch.bool, device=q.device))
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, enable_gqa=enable_gqa)
+
+        # Re-assemble the heads side by side and project back to residual stream
+        y = y.transpose(1, 2).contiguous().view(B, T, -1)
+        y = self.c_proj(y)
+        return y
