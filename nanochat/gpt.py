@@ -53,3 +53,22 @@ class CasualSelfAttention(nn.module):
         self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
         self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+
+    def forward(self, x, cos_sin, kv_cache):
+        B, T, C = x.size() #setting the size of x being passed to these vars
+
+        # Project the input to get queries keys, and values
+        
+        #setting q to be c_q 
+        # Q (Query): what this token wants to know
+        # K (Key): what this token has to offer
+        # V (Value): the actual information content to share  
+        q = self.c_q(x).view(B, T, self.n_head, self.head_dim)   
+        k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
+        v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
+
+        # Apply Rotary Embeddings to queries and keys to get relative positional encoding
+        cos, sin = cos_sin
+        q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin) # QK rotary embedding
+        q, k = norm(q), norm(k) # QK norm
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2) # make head be batch dim, i.e. (B, T, H, D) -> (B, H, T, D)
