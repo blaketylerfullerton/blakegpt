@@ -148,6 +148,54 @@ class CasualSelfAttention(nn.module):
             x = x + self.mlp(norm(x))
             return x
 
+class GPT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.transformer = nn.ModuleDict({
+            "wte": nn.Embedding(config.vocab_size, config.n_embd),
+             """
+                Token Embeddings
+                    - wte: converts token IDs into embedding vectors
+            """
+            "h": nn.ModuleList([Block(config, layer_idx) for layer_idx in range(config.n_layer)]),
+            """
+                Token Embeddings
+                    - wte converts token IDs into embedding vectors
+            """
+        })
+         """
+         Lanuage Model head
+            - projects final embeddings back into vocabulary digits
+        """
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        
+        # To support meta device initialization, we init the rotary embeddings here, but it's fake
+        # As for rotary_seq_len, these rotary embeddings are pretty small/cheap in memory,
+        # so let's just over-compute them, but assert fail if we ever reach that amount.
+        # In the future we can dynamically grow the cache, for now it's fine.
+        self.rotary_seq_len = config.sequence_len * 10 # 10X over-compute should be enough, TODO make nicer?
+        head_dim = config.n_embd // config.n_head
+        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
+        self.register_buffer("cos", cos, persistent=False) # persistent=False means it's not saved to the checkpoint
+        self.register_buffer("sin", sin, persistent=False)
+
+    def init_weights(self):
+        self.apply(self._init_weights)
+        # zero out classifier weights
+        torch.nn.init.zeros_(self.lm_head.weight)
+        # zero out c_proj weights in all blocks
+        for block in self.transformer.h:
+            torch.nn.init.zeros_(block.mlp.c_proj.weight)
+            torch.nn.init.zeros_(block.attn.c_proj.weight)
+        # init the rotary embeddings
+        head_dim = self.config.n_embd // self.config.n_head
+        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
+        self.cos, self.sin = cos, sin
+        # Cast the embeddings from fp32 to bf16: optim can tolerate it and it saves memory: both in the model and the activations
+        if self.transformer.wte.weight.device.type == "cuda":
+            self.transformer.wte.to(dtype=torch.bfloat16)
+
 
 
 
