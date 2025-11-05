@@ -196,7 +196,42 @@ class GPT(nn.Module):
         if self.transformer.wte.weight.device.type == "cuda":
             self.transformer.wte.to(dtype=torch.bfloat16)
 
+    def _init_weights(self, module):
+            if isinstance(module, nn.Linear):
+                # https://arxiv.org/pdf/2310.17813
+                fan_out = module.weight.size(0)
+                fan_in = module.weight.size(1)
+                std = 1.0 / math.sqrt(fan_in) * min(1.0, math.sqrt(fan_out / fan_in))
+                torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=1.0)
 
+    # TODO: bump base theta more, e.g. 100K is more common more recently
+    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
+        # autodetect the device from model embeddings
+        if device is None:
+            device = self.transformer.wte.weight.device
+        # stride the channels
+        channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
+        inv_freq = 1.0 / (base ** (channel_range / head_dim))
+        # stride the time steps
+        t = torch.arange(seq_len, dtype=torch.float32, device=device)
+        # calculate the rotation frequencies at each (time, channel) pair
+        freqs = torch.outer(t, inv_freq)
+        cos, sin = freqs.cos(), freqs.sin()
+        cos, sin = cos.bfloat16(), sin.bfloat16() # keep them in bfloat16
+        cos, sin = cos[None, :, None, :], sin[None, :, None, :] # add batch and head dims for later broadcasting
+        return cos, sin
 
+    def get_device(self):
+            return self.transformer.wte.weight.device
 
-    
+    def estimate_flops(self):
+        """ Return the estimated FLOPs per token for the model. Ref: https://arxiv.org/abs/2204.02311 """
+        nparams = sum(p.numel() for p in self.parameters())
+        nparams_embedding = self.transformer.wte.weight.numel()
+        l, h, q, t = self.config.n_layer, self.config.n_head, self.config.n_embd // self.config.n_head, self.config.sequence_len
+        num_flops_per_token = 6 * (nparams - nparams_embedding) + 12 * l * h * q * t
+        return num_flops_per_token
