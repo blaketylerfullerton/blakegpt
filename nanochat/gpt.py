@@ -104,3 +104,51 @@ class CasualSelfAttention(nn.module):
         y = y.transpose(1, 2).contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
+
+
+    class MLP(nn.Module):
+        """
+        This Class is the Multi Layer Perceptron
+            - This expands the embedeeing dimensions by 4 Times  (1)
+            - Applies the Relu activation function (2)
+            - Then projects back to the origional dimension (3)
+        """
+        """
+        The MLP serves as the position-wise feed-forward network in each transformer block. 
+        After the attention mechanism processes the input (focusing on relationships between tokens), 
+        the MLP provides additional non-linear transformation capacity to each position independently.
+        """
+        def __init__(self, config):
+            super().__init__()
+            self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
+            self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+
+        def forward(self, x):
+            x = self.c_fc(x) # (1)
+            x = F.relu(x).square() # (2)
+            x = self.c_proj(x) # (3)
+            return x
+
+
+    class Block(nn.Module):
+        """
+        Each Block performs two key operations in sequence using residual connections
+        """
+        def __init__(self, config, layer_idx):
+            super().__init__()
+            self.attn = CausalSelfAttention(config, layer_idx) #Self Attention, normalizing the input, and applies casual self attention
+            self.mlp = MLP(config)
+
+        """
+        Feed-Forward MLP. 
+        Normalizing output from step 1, applies MLP transformation, and adds result back
+        """
+        def forward(self, x, cos_sin, kv_cache):
+            x = x + self.attn(norm(x), cos_sin, kv_cache)
+            x = x + self.mlp(norm(x))
+            return x
+
+
+
+
+    
