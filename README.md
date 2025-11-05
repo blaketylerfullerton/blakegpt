@@ -1,3 +1,5 @@
+# Blake GPT
+
 ![blakechat logo](dev/blakechat.png)
 
 This is an attempt to mimic Nano Chat (Andrej Karparthy's repository)
